@@ -21,6 +21,7 @@ const CONFIG_EQUIPOS = {
 
 const playerEntities = new Map();
 const isMobile = AFRAME.utils.device.isMobile();
+const MAX_ROPE_TILT_DEG = 13;
 
 function initScene() {
   console.log(`Motor de renderizado: ${isMobile ? 'MÓVIL (2D Sprites)' : 'DESKTOP (3D VRM)'}`);
@@ -116,13 +117,27 @@ function renderScene(activePlayers, currentPlayer) {
       });
 
       const textoEl = document.createElement('a-text');
-      textoEl.setAttribute('position', `0 ${conf.alturaTexto} 0`);
+      textoEl.setAttribute('position', `0 ${conf.alturaTexto + 0.18} 0.04`);
       textoEl.setAttribute('align', 'center');
-      textoEl.setAttribute('width', '4');
+      textoEl.setAttribute('width', '4.8');
+      textoEl.setAttribute('material', 'shader: flat; fog: false');
       textoEl.classList.add('player-label');
+      
+      const labelBg = document.createElement('a-plane');
+      labelBg.classList.add('player-label-bg');
+      labelBg.setAttribute('position', `0 ${conf.alturaTexto + 0.18} 0.025`);
+      labelBg.setAttribute('width', '1.7');
+      labelBg.setAttribute('height', '0.34');
+      labelBg.setAttribute('material', {
+          color: '#07111f',
+          transparent: true,
+          opacity: 0.58,
+          shader: 'flat'
+      });
 
       grupoEl.appendChild(marcadorBase);
       grupoEl.appendChild(jugadorEl);
+      grupoEl.appendChild(labelBg);
       grupoEl.appendChild(textoEl);
       container.appendChild(grupoEl);
       playerEntities.set(player.id, grupoEl);
@@ -135,8 +150,19 @@ function renderScene(activePlayers, currentPlayer) {
     const isLocal = currentPlayer && player.id === currentPlayer.id;
     
     textoEl.setAttribute('value', isLocal ? `> ${displayAlias} <` : displayAlias);
-    textoEl.setAttribute('color', conf.colorTexto);
+    textoEl.setAttribute('color', isLocal ? '#ffffff' : '#e0f2fe');
     if (isLocal) textoEl.setAttribute('font-weight', 'bold');
+    const labelBg = grupoEl.querySelector('.player-label-bg');
+    if (labelBg) {
+        const labelWidth = Math.max(1.7, Math.min(3.1, displayAlias.length * 0.18 + (isLocal ? 0.78 : 0.48)));
+        labelBg.setAttribute('width', labelWidth);
+        labelBg.setAttribute('material', {
+            color: isLocal ? '#082f49' : '#07111f',
+            transparent: true,
+            opacity: isLocal ? 0.72 : 0.58,
+            shader: 'flat'
+        });
+    }
 
     const jugadorEl = grupoEl.querySelector('.vrm-body');
     
@@ -172,15 +198,19 @@ function actualizarCuerda3D(countLeft, countRight) {
   const sistemaCuerda = document.getElementById('sistema-cuerda');
   const arenaJugadores = document.getElementById('arena-jugadores');
   const nuevaPosX = (countRight - countLeft) * 0.02;
+  const tiltZ = calculateRopeTilt(countLeft, countRight);
   
   if (sistemaCuerda) {
     sistemaCuerda.setAttribute('animation__pos',
       `property: position; to: ${nuevaPosX} 1 -5; dur: 300; easing: easeOutQuad`);
+    sistemaCuerda.setAttribute('animation__tilt',
+      `property: rotation; to: 0 0 ${tiltZ}; dur: 380; easing: easeOutCubic`);
   }
   if (arenaJugadores) {
     arenaJugadores.setAttribute('animation__pos',
       `property: position; to: ${nuevaPosX} 0 0; dur: 300; easing: easeOutQuad`);
   }
+  setRopeDominanceGlow(Math.abs(countLeft - countRight));
 }
 
 function actualizarHUDCounts(left, right) {
@@ -203,19 +233,23 @@ function renderPlayerStateUI(currentPlayer) {
 let localOffset = 0;
 function applyLocalMove(offset) {
     localOffset += offset;
+    triggerPullFeedback(offset);
     updateRopeTransform();
 }
 
 function syncRopeWithPulls(leftTotal, rightTotal) {
     const basePosX = (rightTotal - leftTotal) * 0.02;
+    const tiltZ = calculateRopeTilt(leftTotal, rightTotal);
     const sistemaCuerda = document.getElementById('sistema-cuerda');
     const arenaJugadores = document.getElementById('arena-jugadores');
     if (sistemaCuerda) {
         sistemaCuerda.setAttribute('animation__pos', `property: position; to: ${basePosX} 1 -5; dur: 300; easing: easeOutQuad`);
+        sistemaCuerda.setAttribute('animation__tilt', `property: rotation; to: 0 0 ${tiltZ}; dur: 360; easing: easeOutCubic`);
     }
     if (arenaJugadores) {
         arenaJugadores.setAttribute('animation__pos', `property: position; to: ${basePosX} 0 0; dur: 300; easing: easeOutQuad`);
     }
+    setRopeDominanceGlow(Math.abs(leftTotal - rightTotal));
     localOffset = 0;
 }
 
@@ -225,6 +259,30 @@ function updateRopeTransform() {
     const currentPos = sistemaCuerda.getAttribute('position');
     sistemaCuerda.setAttribute('position', { x: currentPos.x + localOffset, y: currentPos.y, z: currentPos.z });
     localOffset = 0;
+}
+
+function calculateRopeTilt(leftValue, rightValue) {
+    const diff = rightValue - leftValue;
+    return Math.max(-MAX_ROPE_TILT_DEG, Math.min(MAX_ROPE_TILT_DEG, diff * 3.2));
+}
+
+function triggerPullFeedback(offset) {
+    const sistemaCuerda = document.getElementById('sistema-cuerda');
+    const sidePulse = document.getElementById(offset < 0 ? 'left-pull-pulse' : 'right-pull-pulse');
+    if (sistemaCuerda) {
+        const currentRotation = sistemaCuerda.getAttribute('rotation') || { x: 0, y: 0, z: 0 };
+        const tugTilt = Math.max(-MAX_ROPE_TILT_DEG, Math.min(MAX_ROPE_TILT_DEG, (currentRotation.z || 0) + (offset < 0 ? -2.4 : 2.4)));
+        sistemaCuerda.setAttribute('animation__tug',
+            `property: rotation; to: 0 0 ${tugTilt}; dur: 70; dir: alternate; loop: 2; easing: easeOutQuad`);
+        sistemaCuerda.setAttribute('animation__bounce',
+            'property: scale; from: 1 1 1; to: 1.015 1.015 1.015; dur: 70; dir: alternate; loop: 2; easing: easeOutQuad');
+    }
+    if (sidePulse) {
+        sidePulse.setAttribute('animation__pulse',
+            'property: material.opacity; from: 0.32; to: 0; dur: 360; easing: easeOutQuad');
+        sidePulse.setAttribute('animation__scale',
+            'property: scale; from: 0.92 0.92 0.92; to: 1.08 1.08 1.08; dur: 360; easing: easeOutQuad');
+    }
 }
 
 function animateMarker() {
@@ -239,8 +297,49 @@ function animatePull(playerId) {
     const entity = playerEntities.get(playerId);
     if (!entity) return;
     const label = entity.querySelector('.player-label');
+    const marker = entity.querySelector('.marker-disc');
+    const body = entity.querySelector('.vrm-body');
     if (label) {
         label.setAttribute('animation__pull', { property: 'scale', from: '1 1 1', to: '1.2 1.2 1.2', dur: 100, dir: 'alternate', loop: 2, easing: 'easeOutQuad' });
+    }
+    if (marker) {
+        marker.setAttribute('animation__pullmarker', { property: 'scale', from: '1 1 1', to: '1.35 1.35 1.35', dur: 130, dir: 'alternate', loop: 2, easing: 'easeOutQuad' });
+    }
+    if (body) {
+        const pos = body.getAttribute('position') || { x: 0, y: 0, z: 0 };
+        body.setAttribute('animation__bodypull', {
+            property: 'position',
+            from: `${pos.x} ${pos.y} ${pos.z}`,
+            to: `${pos.x + 0.08} ${pos.y} ${pos.z - 0.04}`,
+            dur: 90,
+            dir: 'alternate',
+            loop: 2,
+            easing: 'easeOutQuad'
+        });
+    }
+}
+
+function setRopeDominanceGlow(diff) {
+    const band = document.getElementById('rope-center-band');
+    const glow = document.getElementById('rope-center-glow');
+    const intensity = Math.min(1, diff / 5);
+    if (band) {
+        band.setAttribute('material', {
+            shader: 'flat',
+            color: intensity > 0 ? '#ff3b3b' : '#ef4444',
+            emissive: '#ff2a2a',
+            emissiveIntensity: 0.36 + (intensity * 0.64)
+        });
+    }
+    if (glow) {
+        const radius = 0.25 + (intensity * 0.12);
+        glow.setAttribute('radius', radius);
+        glow.setAttribute('material', {
+            shader: 'flat',
+            color: '#ff4d4d',
+            transparent: true,
+            opacity: 0.28 + (intensity * 0.38)
+        });
     }
 }
 
